@@ -1,4 +1,4 @@
-<img src="/images/icon.svg" width=80 />
+<img src="/images/icon.svg" width=80 align="middle" />&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://chromewebstore.google.com/detail/golinks+/phgcihocgkhbkmlcjpggjcakbelcapfi"><img src="https://developer.chrome.com/static/docs/webstore/branding/image/206x58-chrome-web-bcb82d15b2486.png" alt="Available in the Chrome Web Store" width=206 align="middle" /></a>
 
 ## golinks+
 
@@ -15,12 +15,20 @@
 
 golinks in your browser, without the need to modify DNS settings or run a server.
 
-This is an unpacked Chrome extension which leverages Chrome's [`omnibox`](https://developer.chrome.com/docs/extensions/reference/api/omnibox) API to function as an all-in-one golinks system for personal use.
+This is a Chrome extension which leverages Chrome's [`omnibox`](https://developer.chrome.com/docs/extensions/reference/api/omnibox) API to function as an all-in-one golinks system for personal use.
 
 > [!IMPORTANT]  
 > golink data can be kept entirely **local**, using Chrome's [`storage.local`](https://developer.chrome.com/docs/extensions/reference/api/storage#storage_areas). Loading golinks from a shared CSV and creating links in it are optional.
 
 ### Installation
+
+1. Open the [golinks+ page in the Chrome Web Store](https://chromewebstore.google.com/detail/golinks+/phgcihocgkhbkmlcjpggjcakbelcapfi)
+2. Click **Add to Chrome**
+3. The extension should install and open the help page
+
+#### Manual installation (alternative)
+
+To run the extension from source instead:
 
 1. Clone (or download) this repo
 2. Go to **Manage Extensions** in your Chrome-based browser (`chrome://extensions`)
