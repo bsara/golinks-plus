@@ -2,7 +2,7 @@ const EDIT_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24
 const RELOAD_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-refresh-cw"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>';
 const DELETE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-trash-2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
 
-const SHARED_SETTINGS_KEYS = ["sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksCreateURLTemplate", "sharedGolinksCreateOnUnknown"];
+const SHARED_SETTINGS_KEYS = ["sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksCreateURLTemplate", "sharedGolinksCreateOnUnknown", "sharedGolinksNoCache"];
 
 document.addEventListener('DOMContentLoaded', function () {
     const table = document.querySelector('.golink-table tbody');
@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const sharedInputSection = sharedForm.querySelector('.shared-golinks--input');
     const sharedCancelLink = sharedForm.querySelector('.shared-golinks--cancel');
     const sharedSkipHeaderCheckbox = sharedForm.querySelector('input[name="skipHeader"]');
+    const sharedNoCacheCheckbox = sharedForm.querySelector('input[name="noCache"]');
     const sharedConfigureCreateButton = sharedForm.querySelector('.shared-golinks--configure-create');
     const sharedCreateDialog = document.querySelector('.shared-create-dialog');
     const sharedCreateForm = sharedCreateDialog.querySelector('form#shared-create');
@@ -33,6 +34,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const sharedImportLink = sharedForm.querySelector('.shared-golinks--import');
     const sharedImportFileInput = sharedForm.querySelector('.shared-golinks--import-file');
     const sharedExportLink = sharedForm.querySelector('.shared-golinks--export');
+    const sharedCountLabel = sharedForm.querySelector('.shared-golinks--count');
     const filterInput = document.querySelector('.golink-table--filter');
     let savedSharedURL = '';
     // Keys locked by enterprise policy; the background worker copies their values into local storage
@@ -52,15 +54,27 @@ document.addEventListener('DOMContentLoaded', function () {
     async function rerenderTable() {
         table.querySelectorAll('.golink-row').forEach(row => row.remove());
 
-        const { golinks, sharedGolinks = {} } = await chrome.storage.local.get(["golinks", "sharedGolinks"]);
+        const { golinks, sharedGolinks = {}, sharedGolinksURL, sharedGolinksSkipHeader = false, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksNoCache"]);
+        let sharedGolinksData = sharedGolinks || {};
+        if (sharedGolinksNoCache && sharedGolinksURL) {
+            try {
+                const hasHostPermission = await chrome.permissions.contains(__helpers.toHostPermission(sharedGolinksURL));
+                const response = await fetch(sharedGolinksURL, { credentials: hasHostPermission ? "include" : "same-origin" });
+                if (response.ok) {
+                    sharedGolinksData = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
+                }
+            } catch (e) {
+                sharedGolinksData = sharedGolinks || {};
+            }
+        }
         const localEntries = Object.entries(golinks || {}).map(([key, value]) => [key, value, false]);
-        const sharedEntries = Object.entries(sharedGolinks).map(([key, value]) => [key, value, true]);
+        const sharedEntries = Object.entries(sharedGolinksData).map(([key, value]) => [key, value, true]);
 
         // Alphabetical by name; a local golink comes before the shared golink it overrides
         const entries = [...localEntries, ...sharedEntries]
             .sort(([keyA, , isSharedA], [keyB, , isSharedB]) => keyA.localeCompare(keyB) || isSharedA - isSharedB);
 
-        const totalGolinkCount = Object.keys({ ...sharedGolinks, ...golinks }).length;
+        const totalGolinkCount = Object.keys({ ...sharedGolinksData, ...golinks }).length;
         golinkCountLabel.textContent = `${totalGolinkCount} link${totalGolinkCount === 1 ? '' : 's'}`;
 
         for (let [key, value, isShared] of entries) {
@@ -165,17 +179,72 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function renderSharedStatus() {
-        const { sharedGolinksURL, sharedGolinks, sharedGolinksError } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinks", "sharedGolinksError"]);
-        sharedStatus.classList.toggle('shared-golinks--status-error', Boolean(sharedGolinksURL && sharedGolinksError));
+        const { sharedGolinksURL, sharedGolinks, sharedGolinksError, sharedGolinksNoCache = false, sharedGolinksSkipHeader = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinks", "sharedGolinksError", "sharedGolinksNoCache", "sharedGolinksSkipHeader"]);
         if (!sharedGolinksURL) {
-            sharedStatus.textContent = '';
-        } else if (sharedGolinksError) {
-            sharedStatus.textContent = `Failed to load shared golinks: ${sharedGolinksError}`;
+            if (sharedStatus) {
+                sharedStatus.textContent = '';
+                sharedStatus.classList.remove('shared-golinks--status-error');
+            }
+            if (sharedCountLabel) sharedCountLabel.textContent = '';
+            return;
+        }
+        if (sharedGolinksNoCache) {
+            if (sharedStatus) {
+                sharedStatus.classList.remove('shared-golinks--status-error');
+                sharedStatus.textContent = '';
+            }
+            if (sharedCountLabel) sharedCountLabel.textContent = 'Loading shared golinks...';
+            try {
+                if (typeof chrome !== 'undefined' && chrome.permissions) {
+                    const hasHostPermission = await chrome.permissions.contains(__helpers.toHostPermission(sharedGolinksURL));
+                    const response = await fetch(sharedGolinksURL, { credentials: hasHostPermission ? "include" : "same-origin" });
+                    if (response.ok) {
+                        const sharedGolinksData = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
+                        const sharedGolinkCount = Object.keys(sharedGolinksData).length;
+                        if (sharedCountLabel) sharedCountLabel.textContent = `${sharedGolinkCount} shared link${sharedGolinkCount === 1 ? '' : 's'}`;
+                        return;
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } else {
+                    const response = await fetch(sharedGolinksURL);
+                    if (response.ok) {
+                        const sharedGolinksData = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
+                        const sharedGolinkCount = Object.keys(sharedGolinksData).length;
+                        if (sharedCountLabel) sharedCountLabel.textContent = `${sharedGolinkCount} shared link${sharedGolinkCount === 1 ? '' : 's'}`;
+                        return;
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                }
+            } catch (e) {
+                if (sharedStatus) {
+                    sharedStatus.classList.add('shared-golinks--status-error');
+                    sharedStatus.textContent = `Failed to load shared golinks: ${e.message}`;
+                }
+                if (sharedCountLabel) sharedCountLabel.textContent = '';
+                return;
+            }
+        }
+        if (sharedStatus) {
+            sharedStatus.classList.toggle('shared-golinks--status-error', Boolean(sharedGolinksError));
+        }
+        if (sharedGolinksError) {
+            if (sharedStatus) sharedStatus.textContent = `Failed to load shared golinks: ${sharedGolinksError}`;
+            if (sharedCountLabel) sharedCountLabel.textContent = '';
         } else if (sharedGolinks === undefined) {
-            sharedStatus.textContent = 'Loading shared golinks...';
+            if (sharedStatus) {
+                sharedStatus.classList.remove('shared-golinks--status-error');
+                sharedStatus.textContent = '';
+            }
+            if (sharedCountLabel) sharedCountLabel.textContent = 'Loading shared golinks...';
         } else {
             const sharedGolinkCount = Object.keys(sharedGolinks).length;
-            sharedStatus.textContent = `${sharedGolinkCount} shared link${sharedGolinkCount === 1 ? '' : 's'} loaded.`;
+            if (sharedStatus) {
+                sharedStatus.classList.remove('shared-golinks--status-error');
+                sharedStatus.textContent = '';
+            }
+            if (sharedCountLabel) sharedCountLabel.textContent = `${sharedGolinkCount} shared link${sharedGolinkCount === 1 ? '' : 's'}`;
         }
     }
 
@@ -194,6 +263,9 @@ document.addEventListener('DOMContentLoaded', function () {
         sharedEditLink.hidden = managedKeys.has('sharedGolinksURL');
         sharedDeleteLink.hidden = managedKeys.has('sharedGolinksURL');
         sharedSkipHeaderCheckbox.disabled = managedKeys.has('sharedGolinksSkipHeader');
+        if (sharedNoCacheCheckbox) {
+            sharedNoCacheCheckbox.disabled = managedKeys.has('sharedGolinksNoCache');
+        }
         sharedSettingsLinks.hidden = managedKeys.size > 0;
         sharedManagedNote.hidden = managedKeys.size === 0;
         sharedConfigureCreateButton.hidden = !savedSharedURL;
@@ -213,9 +285,15 @@ document.addEventListener('DOMContentLoaded', function () {
         // The policy value for opening the creation URL on unknown links is only a default, so it stays editable
         const { sharedGolinksCreateOnUnknown, ...managed } = await chrome.storage.managed.get(null);
         managedKeys = new Set(Object.keys(managed));
-        const { sharedGolinksURL = '', sharedGolinksSkipHeader = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksSkipHeader"]);
+        const { sharedGolinksURL = '', sharedGolinksSkipHeader = false, sharedGolinksNoCache = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksNoCache"]);
         savedSharedURL = sharedGolinksURL;
         sharedSkipHeaderCheckbox.checked = sharedGolinksSkipHeader;
+        if (sharedNoCacheCheckbox) {
+            sharedNoCacheCheckbox.checked = sharedGolinksNoCache;
+        }
+        if (!sharedGolinksURL && sharedCountLabel) {
+            sharedCountLabel.textContent = '';
+        }
         sharedReloadLink.innerHTML = RELOAD_ICON;
         sharedEditLink.innerHTML = EDIT_ICON;
         sharedDeleteLink.innerHTML = DELETE_ICON;
@@ -227,8 +305,13 @@ document.addEventListener('DOMContentLoaded', function () {
     sharedReloadLink.addEventListener('click', async (e) => {
         e.preventDefault();
         await requestHostPermission(savedSharedURL);
-        sharedStatus.classList.remove('shared-golinks--status-error');
-        sharedStatus.textContent = 'Reloading shared golinks...';
+        const { sharedGolinksNoCache = false } = await chrome.storage.local.get("sharedGolinksNoCache");
+        if (sharedGolinksNoCache) {
+            if (sharedCountLabel) sharedCountLabel.textContent = 'Loading shared golinks...';
+            rerenderTable();
+            await renderSharedStatus();
+            return;
+        }
         await chrome.runtime.sendMessage({ type: 'refreshSharedGolinks' });
         // Unchanged shared golinks don't fire storage.onChanged, so the status is refreshed here
         renderSharedStatus();
@@ -237,6 +320,12 @@ document.addEventListener('DOMContentLoaded', function () {
     sharedSkipHeaderCheckbox.addEventListener('change', () => {
         chrome.storage.local.set({ sharedGolinksSkipHeader: sharedSkipHeaderCheckbox.checked });
     });
+
+    if (sharedNoCacheCheckbox) {
+        sharedNoCacheCheckbox.addEventListener('change', () => {
+            chrome.storage.local.set({ sharedGolinksNoCache: sharedNoCacheCheckbox.checked });
+        });
+    }
 
     sharedEditLink.addEventListener('click', (e) => {
         e.preventDefault();
@@ -256,6 +345,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         await chrome.storage.local.remove("sharedGolinksURL");
         savedSharedURL = '';
+        if (sharedCountLabel) sharedCountLabel.textContent = '';
         renderSharedForm(false);
     });
 
@@ -265,6 +355,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!value) {
             await chrome.storage.local.remove("sharedGolinksURL");
             savedSharedURL = '';
+            if (sharedCountLabel) sharedCountLabel.textContent = '';
             renderSharedForm(false);
             return;
         }
@@ -345,7 +436,7 @@ document.addEventListener('DOMContentLoaded', function () {
             alert(`Invalid settings file: ${error.message}`);
             return;
         }
-        const { sharedGolinksURL, sharedGolinksSkipHeader, sharedGolinksCreateURLTemplate, sharedGolinksCreateOnUnknown } = settings ?? {};
+        const { sharedGolinksURL, sharedGolinksSkipHeader, sharedGolinksCreateURLTemplate, sharedGolinksCreateOnUnknown, sharedGolinksNoCache } = settings ?? {};
         if (typeof sharedGolinksURL !== 'string' || !__helpers.isValidURL(sharedGolinksURL)) {
             alert('Invalid settings file: sharedGolinksURL must be a valid URL');
             return;
@@ -362,6 +453,7 @@ document.addEventListener('DOMContentLoaded', function () {
         await chrome.storage.local.set({
             sharedGolinksURL,
             sharedGolinksSkipHeader: Boolean(sharedGolinksSkipHeader),
+            sharedGolinksNoCache: Boolean(sharedGolinksNoCache),
             ...(sharedGolinksCreateURLTemplate && {
                 sharedGolinksCreateURLTemplate,
                 sharedGolinksCreateOnUnknown: Boolean(sharedGolinksCreateOnUnknown),
@@ -382,10 +474,10 @@ document.addEventListener('DOMContentLoaded', function () {
         if (SHARED_SETTINGS_KEYS.some(key => changes[key])) {
             initSharedForm();
         }
-        if (changes.sharedGolinks) {
+        if (changes.sharedGolinks || changes.sharedGolinksNoCache || changes.sharedGolinksSkipHeader) {
             rerenderTable();
         }
-        if (changes.sharedGolinksURL || changes.sharedGolinks || changes.sharedGolinksError) {
+        if (changes.sharedGolinksURL || changes.sharedGolinks || changes.sharedGolinksError || changes.sharedGolinksNoCache || changes.sharedGolinksSkipHeader) {
             renderSharedStatus();
         }
         if (changes.sharedGolinksCreateURLTemplate) {

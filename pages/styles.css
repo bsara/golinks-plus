@@ -190,13 +190,31 @@ a:hover {
 
   .shared-golinks--header {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
     margin-bottom: var(--1);
+  }
 
-    label {
-      margin-bottom: 0;
-    }
+  .shared-golinks--header-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--2);
+    margin-bottom: var(--1);
+  }
+
+  .shared-golinks--title-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--2);
+  }
+
+  .shared-golinks--title-row label {
+    margin-bottom: 0;
+  }
+
+  .shared-golinks--count {
+    white-space: nowrap;
+    color: var(--stone-500);
   }
 
   .shared-golinks--view {
@@ -230,13 +248,36 @@ a:hover {
   }
 
   .shared-golinks--options {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
     margin: var(--2) 0 0 0;
   }
 
+  .shared-golinks--options-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--2);
+  }
+
+  .shared-golinks--checkboxes {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--2);
+  }
+
+  .shared-golinks--checkboxes > * {
+    margin: 0;
+  }
+
   .shared-golinks--skip-header {
+    display: flex;
+    align-items: center;
+    gap: var(--2);
+    margin: 0;
+    font-weight: normal;
+  }
+
+  .shared-golinks--no-cache {
     display: flex;
     align-items: center;
     gap: var(--2);

@@ -44,21 +44,22 @@ Type `go`, press <kbd>Space</kbd>, then type a name to search your golinks.
 <img src="/images/screenshot.png" />
 
 ### Shared golinks
-
+ 
 Load shared golinks from a CSV file at a URL, for example a team's Google Sheet or a GitHub Gist.
-
+ 
 <img src="/images/screenshot-shared-golinks.png" />
-
+ 
 1. On the index page, enter the URL in **Shared CSV URL** and click **Save**
 2. When Chrome asks for access to the site, allow it if the file needs you to be signed in (such as a private Google Sheet)
 3. Select **Ignore the first line (header row)** if the file has a header
-
+4. Select **Don't save shared golinks to my computer** to fetch shared golinks on demand instead of caching them locally
+ 
 Each line of the CSV is `name,url`. Lines with an empty name or an invalid URL are skipped.
-
+ 
 For a Google Sheet, use its CSV export URL: `https://docs.google.com/spreadsheets/d/<sheet-id>/export?format=csv`
-
+ 
 Shared golinks reload when the browser starts and periodically after that. Click the reload icon next to the URL to reload them now.
-
+ 
 On the index page, shared golinks are marked `shared`. A personal golink with the same name overrides the shared one.
 
 ### Shared link creation

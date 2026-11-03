@@ -39,14 +39,23 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (areaName !== "local") {
     return;
   }
-  if (changes.sharedGolinksSkipHeader && !changes.sharedGolinksURL) {
+  if ((changes.sharedGolinksSkipHeader || changes.sharedGolinksNoCache) && !changes.sharedGolinksURL) {
+    const { sharedGolinksNoCache = false } = await chrome.storage.local.get("sharedGolinksNoCache");
+    if (sharedGolinksNoCache) {
+      globalThis.__golinksPlusSharedCache = undefined;
+    }
     return refreshSharedGolinks();
   }
   if (!changes.sharedGolinksURL) {
+    if (changes.sharedGolinksNoCache) {
+      globalThis.__golinksPlusSharedCache = undefined;
+      refreshSharedGolinks();
+    }
     return;
   }
   // Drops the previous URL's golinks so they don't linger if the new URL fails
   await chrome.storage.local.remove(["sharedGolinks", "sharedGolinksError"]);
+  globalThis.__golinksPlusSharedCache = undefined;
   refreshSharedGolinks();
 });
 
@@ -148,8 +157,25 @@ function fuzzyMatch(query, name) {
 
 // Local golinks win over shared golinks with the same name
 async function getGolinks() {
-  const { golinks = {}, sharedGolinks = {} } = await chrome.storage.local.get(["golinks", "sharedGolinks"]);
-  return { ...sharedGolinks, ...golinks };
+  const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksSkipHeader = false, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksNoCache"]);
+  let sharedGolinksData = sharedGolinks || {};
+  if (sharedGolinksNoCache && sharedGolinksURL) {
+    if (globalThis.__golinksPlusSharedCache && Object.keys(globalThis.__golinksPlusSharedCache).length > 0) {
+      sharedGolinksData = globalThis.__golinksPlusSharedCache;
+    } else {
+      try {
+        const hasHostPermission = await chrome.permissions.contains(__helpers.toHostPermission(sharedGolinksURL));
+        const response = await fetch(sharedGolinksURL, { credentials: hasHostPermission ? "include" : "same-origin" });
+        if (response.ok) {
+          sharedGolinksData = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
+          globalThis.__golinksPlusSharedCache = sharedGolinksData;
+        }
+      } catch (e) {
+        sharedGolinksData = {};
+      }
+    }
+  }
+  return { ...sharedGolinksData, ...golinks };
 }
 
 // Matches the create page, which only allows shared link creation when a shared CSV URL is also set
@@ -205,7 +231,7 @@ function navigate(url, disposition) {
 
 // Failed fetches keep the cached shared golinks and record the error for the options page
 async function refreshSharedGolinks() {
-  const { sharedGolinksURL, sharedGolinksSkipHeader = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksSkipHeader"]);
+  const { sharedGolinksURL, sharedGolinksSkipHeader = false, sharedGolinksNoCache = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksNoCache"]);
   if (!sharedGolinksURL) {
     return;
   }
@@ -219,6 +245,12 @@ async function refreshSharedGolinks() {
       throw new Error(`HTTP ${response.status}`);
     }
     const sharedGolinks = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
+    if (sharedGolinksNoCache) {
+      await chrome.storage.local.remove(["sharedGolinks"]);
+      await chrome.storage.local.remove("sharedGolinksError");
+      globalThis.__golinksPlusSharedCache = sharedGolinks;
+      return;
+    }
     await chrome.storage.local.set({ sharedGolinks });
     await chrome.storage.local.remove("sharedGolinksError");
   } catch (error) {

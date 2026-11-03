@@ -26,13 +26,18 @@
     <section class="container">
       <form id="shared-golinks" class="shared-golinks">
         <section class="shared-golinks--header">
-          <label for="shared-golinks-url">Shared CSV URL</label>
-          <section class="shared-golinks--settings">
-            <a href="#" class="shared-golinks--import">Import</a>
-            or
-            <a href="#" class="shared-golinks--export">Export</a>
-            settings
-            <input type="file" accept=".json,application/json" class="shared-golinks--import-file" hidden />
+          <section class="shared-golinks--header-top">
+            <div class="shared-golinks--title-row">
+              <label for="shared-golinks-url">Shared CSV URL</label>
+              <span class="shared-golinks--count"></span>
+            </div>
+            <section class="shared-golinks--settings">
+              <a href="#" class="shared-golinks--import">Import</a>
+              or
+              <a href="#" class="shared-golinks--export">Export</a>
+              settings
+              <input type="file" accept=".json,application/json" class="shared-golinks--import-file" hidden />
+            </section>
           </section>
           <p class="shared-golinks--managed" hidden>Some settings are managed by your organization</p>
         </section>
@@ -48,11 +53,19 @@
           <a href="#" class="shared-golinks--cancel" hidden>Cancel</a>
         </section>
         <section class="shared-golinks--options">
-          <label class="shared-golinks--skip-header">
-            <input type="checkbox" name="skipHeader" />
-            Ignore the first line (header row)
-          </label>
-          <input type="button" value="Add Shared Link Creation" class="button shared-golinks--configure-create" hidden />
+          <div class="shared-golinks--options-row">
+            <div class="shared-golinks--checkboxes">
+              <label class="shared-golinks--skip-header">
+                <input type="checkbox" name="skipHeader" />
+                Ignore the first line (header row)
+              </label>
+              <label class="shared-golinks--no-cache">
+                <input type="checkbox" name="noCache" />
+                Don't save shared golinks to my computer
+              </label>
+            </div>
+            <input type="button" value="Add Shared Link Creation" class="button shared-golinks--configure-create" hidden />
+          </div>
         </section>
         <p class="shared-golinks--status"></p>
       </form>

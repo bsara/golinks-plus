@@ -16,6 +16,10 @@
     "sharedGolinksCreateOnUnknown": {
       "title": "Open the shared link creation URL for unknown go links",
       "type": "boolean"
+    },
+    "sharedGolinksNoCache": {
+      "title": "Don't save shared golinks to my computer",
+      "type": "boolean"
     }
   }
 }
