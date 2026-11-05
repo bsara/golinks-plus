@@ -66,12 +66,17 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "refreshSharedGolinks") {
-    return;
+  if (message?.type === "refreshSharedGolinks") {
+    refreshSharedGolinks().then(() => sendResponse());
+    // Keeps the message channel open until sendResponse is called
+    return true;
   }
-  refreshSharedGolinks().then(() => sendResponse());
-  // Keeps the message channel open until sendResponse is called
-  return true;
+  if (message?.type === "retryGolink") {
+    openGolink(message.text ?? "", "currentTab", { forceSharedRefresh: true })
+      .then(() => sendResponse())
+      .catch((error) => sendResponse({ error: error.message }));
+    return true;
+  }
 });
 
 
@@ -97,28 +102,8 @@ chrome.omnibox.onInputChanged.addListener(async (text, suggest) => {
 
 
 // Receives the selected suggestion's content, or the raw input when no suggestion is selected
-chrome.omnibox.onInputEntered.addListener(async (text, disposition) => {
-  const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksNoCache"]);
-
-  // Personal golinks resolve right away, even if the shared CSV has not loaded yet
-  const localURL = resolveGolinkURL(text, golinks);
-  if (localURL) {
-    return navigate(localURL, disposition);
-  }
-
-  const sharedGolinksData = (sharedGolinksNoCache && sharedGolinksURL)
-    ? await loadSharedGolinks()
-    : (sharedGolinks || {});
-  const url = resolveGolinkURL(text, { ...sharedGolinksData, ...golinks });
-  if (url) {
-    return navigate(url, disposition);
-  }
-  const name = __helpers.sanitizeGolinkName(text);
-  if (!name || INDEX_GOLINK_NAMES.includes(name)) {
-    return navigate(chrome.runtime.getURL("pages/index.html"), disposition);
-  }
-  const sharedCreateURL = await getSharedCreateURL(name);
-  return navigate(sharedCreateURL || chrome.runtime.getURL(`pages/create.html?name=${encodeURIComponent(name)}`), disposition);
+chrome.omnibox.onInputEntered.addListener((text, disposition) => {
+  openGolink(text, disposition);
 });
 
 
@@ -202,27 +187,44 @@ function fetchSharedGolinks() {
 function withTimeout(promise, timeoutMs) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error("Timed out loading shared golinks")), timeoutMs);
+    timeoutId = setTimeout(() => {
+      const error = new Error("Timed out loading shared golinks");
+      error.name = "SharedGolinksTimeoutError";
+      reject(error);
+    }, timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 // A refresh may already be fetching the CSV. Wait for it (briefly) so golinks resolve
-// against the current shared links instead of stale or missing data.
-async function loadSharedGolinks() {
+// against the current shared links instead of stale or missing data. forceRefresh skips
+// the in-memory cache so a retry starts a new request.
+async function loadSharedGolinks({ forceRefresh = false } = {}) {
   const pendingFetch = globalThis.__golinksPlusSharedFetch;
-  if (!pendingFetch && globalThis.__golinksPlusSharedCache && Object.keys(globalThis.__golinksPlusSharedCache).length > 0) {
-    return globalThis.__golinksPlusSharedCache;
+  if (!forceRefresh && !pendingFetch && globalThis.__golinksPlusSharedCache && Object.keys(globalThis.__golinksPlusSharedCache).length > 0) {
+    return { golinks: globalThis.__golinksPlusSharedCache, timedOut: false, error: null };
   }
+  const request = pendingFetch || fetchSharedGolinks();
   try {
-    const fetched = await withTimeout(pendingFetch || fetchSharedGolinks(), SHARED_FETCH_TIMEOUT_MS);
+    const fetched = await withTimeout(request, SHARED_FETCH_TIMEOUT_MS);
     if (fetched) {
       globalThis.__golinksPlusSharedCache = fetched;
     }
-    return fetched ?? {};
-  } catch (e) {
+    return { golinks: fetched ?? {}, timedOut: false, error: null };
+  } catch (error) {
+    const timedOut = error?.name === "SharedGolinksTimeoutError"
+      || error?.name === "TimeoutError"
+      || error?.message === "Timed out loading shared golinks";
+    // Let the next attempt start a fresh request instead of waiting on the one that timed out
+    if (timedOut && globalThis.__golinksPlusSharedFetch === request) {
+      globalThis.__golinksPlusSharedFetch = undefined;
+    }
     // Timeouts and failed fetches keep the previously loaded shared golinks, if any
-    return globalThis.__golinksPlusSharedCache || {};
+    return {
+      golinks: globalThis.__golinksPlusSharedCache || {},
+      timedOut,
+      error: timedOut ? null : (error?.message || String(error)),
+    };
   }
 }
 
@@ -230,9 +232,69 @@ async function loadSharedGolinks() {
 async function getGolinks() {
   const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksNoCache"]);
   const sharedGolinksData = (sharedGolinksNoCache && sharedGolinksURL)
-    ? await loadSharedGolinks()
+    ? (await loadSharedGolinks()).golinks
     : (sharedGolinks || {});
   return { ...sharedGolinksData, ...golinks };
+}
+
+// Shared links could not be fetched in time, so the requested golink may still exist
+function getSharedTimeoutURL(name, text) {
+  return `${chrome.runtime.getURL("pages/shared-timeout.html")}?name=${encodeURIComponent(name)}&text=${encodeURIComponent(text)}`;
+}
+
+// Shared links could not be fetched, so the requested golink may still exist
+function getSharedErrorURL(name, text, error) {
+  const errorParam = error ? `&error=${encodeURIComponent(error)}` : "";
+  return `${chrome.runtime.getURL("pages/shared-error.html")}?name=${encodeURIComponent(name)}&text=${encodeURIComponent(text)}${errorParam}`;
+}
+
+async function openGolink(text, disposition, { forceSharedRefresh = false } = {}) {
+  const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksNoCache = false, sharedGolinksError } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksNoCache", "sharedGolinksError"]);
+
+  // Personal golinks resolve right away, even if the shared CSV has not loaded yet
+  const localURL = resolveGolinkURL(text, golinks);
+  if (localURL) {
+    return navigate(localURL, disposition);
+  }
+
+  let sharedGolinksData = sharedGolinks || {};
+  let sharedGolinksTimedOut = false;
+  let sharedGolinksLoadError = sharedGolinksURL ? (sharedGolinksError || null) : null;
+  if (sharedGolinksURL && (sharedGolinksNoCache || forceSharedRefresh)) {
+    const shared = await loadSharedGolinks({ forceRefresh: forceSharedRefresh });
+    // Cached mode already has links in storage, so keep them when a forced refresh fails
+    if (sharedGolinksNoCache || (!shared.error && !shared.timedOut)) {
+      sharedGolinksData = shared.golinks;
+    }
+    sharedGolinksTimedOut = shared.timedOut;
+    sharedGolinksLoadError = shared.error;
+    // A retry in cached mode fetched the shared links directly, so persist the result
+    if (forceSharedRefresh && !sharedGolinksNoCache) {
+      if (sharedGolinksLoadError) {
+        await chrome.storage.local.set({ sharedGolinksError: sharedGolinksLoadError });
+      } else if (!sharedGolinksTimedOut) {
+        await chrome.storage.local.set({ sharedGolinks: sharedGolinksData });
+        await chrome.storage.local.remove("sharedGolinksError");
+      }
+    }
+  }
+  const url = resolveGolinkURL(text, { ...sharedGolinksData, ...golinks });
+  if (url) {
+    return navigate(url, disposition);
+  }
+  const name = __helpers.sanitizeGolinkName(text);
+  if (!name || INDEX_GOLINK_NAMES.includes(name)) {
+    return navigate(chrome.runtime.getURL("pages/index.html"), disposition);
+  }
+  // Don't send the user to the create page or creation URL when the link may already exist
+  if (sharedGolinksTimedOut) {
+    return navigate(getSharedTimeoutURL(name, text), disposition);
+  }
+  if (sharedGolinksLoadError) {
+    return navigate(getSharedErrorURL(name, text, sharedGolinksLoadError), disposition);
+  }
+  const sharedCreateURL = await getSharedCreateURL(name);
+  return navigate(sharedCreateURL || chrome.runtime.getURL(`pages/create.html?name=${encodeURIComponent(name)}`), disposition);
 }
 
 // Matches the create page, which only allows shared link creation when a shared CSV URL is also set

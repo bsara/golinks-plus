@@ -483,6 +483,34 @@ input.input-attached {
   color: var(--stone-400)
 }
 
+.shared-error--icon {
+  color: var(--red-600);
+  margin-right: var(--1);
+  vertical-align: -0.125em;
+}
+
+.shared-error--detail {
+  background: var(--stone-100);
+  border-radius: var(--2);
+  padding: var(--2) var(--3);
+  color: var(--red-600);
+  font-family: monospace;
+  font-size: .8rem;
+  word-break: break-word;
+}
+
+.shared-timeout--shortcut,
+.shared-error--shortcut {
+  display: inline-block;
+  padding: 0 var(--2);
+  margin-left: var(--1);
+  border-radius: var(--1);
+  background: var(--stone-200);
+  font-family: inherit;
+  font-size: .85em;
+  line-height: 1.5;
+}
+
 .content {
   background: var(--white);
   padding: var(--8) var(--8);
