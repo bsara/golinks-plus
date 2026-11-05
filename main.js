@@ -4,6 +4,7 @@ const GOLINKS_TEMPLATE = { "gh": "https://github.com" };
 const INDEX_GOLINK_NAMES = ["links", "/"];
 const SHARED_REFRESH_ALARM = "refreshSharedGolinks";
 const SHARED_REFRESH_MINUTES = 60;
+const SHARED_FETCH_TIMEOUT_MS = 1000;
 const TRAILING_SLASHES = /\/+$/;
 const XML_SPECIAL_CHARS = /[&<>"']/g;
 
@@ -41,6 +42,9 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   }
   if ((changes.sharedGolinksSkipHeader || changes.sharedGolinksNoCache) && !changes.sharedGolinksURL) {
     const { sharedGolinksNoCache = false } = await chrome.storage.local.get("sharedGolinksNoCache");
+    if (changes.sharedGolinksSkipHeader) {
+      globalThis.__golinksPlusSharedFetch = undefined;
+    }
     if (sharedGolinksNoCache) {
       globalThis.__golinksPlusSharedCache = undefined;
     }
@@ -56,6 +60,7 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   // Drops the previous URL's golinks so they don't linger if the new URL fails
   await chrome.storage.local.remove(["sharedGolinks", "sharedGolinksError"]);
   globalThis.__golinksPlusSharedCache = undefined;
+  globalThis.__golinksPlusSharedFetch = undefined;
   refreshSharedGolinks();
 });
 
@@ -93,8 +98,18 @@ chrome.omnibox.onInputChanged.addListener(async (text, suggest) => {
 
 // Receives the selected suggestion's content, or the raw input when no suggestion is selected
 chrome.omnibox.onInputEntered.addListener(async (text, disposition) => {
-  const golinks = await getGolinks();
-  const url = resolveGolinkURL(text, golinks);
+  const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksNoCache"]);
+
+  // Personal golinks resolve right away, even if the shared CSV has not loaded yet
+  const localURL = resolveGolinkURL(text, golinks);
+  if (localURL) {
+    return navigate(localURL, disposition);
+  }
+
+  const sharedGolinksData = (sharedGolinksNoCache && sharedGolinksURL)
+    ? await loadSharedGolinks()
+    : (sharedGolinks || {});
+  const url = resolveGolinkURL(text, { ...sharedGolinksData, ...golinks });
   if (url) {
     return navigate(url, disposition);
   }
@@ -155,26 +170,68 @@ function fuzzyMatch(query, name) {
   return { score, indices };
 }
 
+// Reuses the fetch already in progress so callers wait for the same shared CSV request
+function fetchSharedGolinks() {
+  if (!globalThis.__golinksPlusSharedFetch) {
+    const request = (async () => {
+      const { sharedGolinksURL, sharedGolinksSkipHeader = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksSkipHeader"]);
+      if (!sharedGolinksURL) {
+        return null;
+      }
+      // Credentials are only sent with host permission; without it CORS applies, and servers that
+      // allow any origin ("*") reject credentialed requests
+      const hasHostPermission = await chrome.permissions.contains(__helpers.toHostPermission(sharedGolinksURL));
+      const response = await fetch(sharedGolinksURL, { credentials: hasHostPermission ? "include" : "same-origin" });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
+    })();
+    const pending = request.finally(() => {
+      // A newer fetch may have replaced this one, so only clear our own promise
+      if (globalThis.__golinksPlusSharedFetch === pending) {
+        globalThis.__golinksPlusSharedFetch = undefined;
+      }
+    });
+    globalThis.__golinksPlusSharedFetch = pending;
+  }
+  return globalThis.__golinksPlusSharedFetch;
+}
+
+// Rejects when the promise takes too long, so an unavailable shared CSV can't block golinks
+function withTimeout(promise, timeoutMs) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Timed out loading shared golinks")), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+// A refresh may already be fetching the CSV. Wait for it (briefly) so golinks resolve
+// against the current shared links instead of stale or missing data.
+async function loadSharedGolinks() {
+  const pendingFetch = globalThis.__golinksPlusSharedFetch;
+  if (!pendingFetch && globalThis.__golinksPlusSharedCache && Object.keys(globalThis.__golinksPlusSharedCache).length > 0) {
+    return globalThis.__golinksPlusSharedCache;
+  }
+  try {
+    const fetched = await withTimeout(pendingFetch || fetchSharedGolinks(), SHARED_FETCH_TIMEOUT_MS);
+    if (fetched) {
+      globalThis.__golinksPlusSharedCache = fetched;
+    }
+    return fetched ?? {};
+  } catch (e) {
+    // Timeouts and failed fetches keep the previously loaded shared golinks, if any
+    return globalThis.__golinksPlusSharedCache || {};
+  }
+}
+
 // Local golinks win over shared golinks with the same name
 async function getGolinks() {
-  const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksSkipHeader = false, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksNoCache"]);
-  let sharedGolinksData = sharedGolinks || {};
-  if (sharedGolinksNoCache && sharedGolinksURL) {
-    if (globalThis.__golinksPlusSharedCache && Object.keys(globalThis.__golinksPlusSharedCache).length > 0) {
-      sharedGolinksData = globalThis.__golinksPlusSharedCache;
-    } else {
-      try {
-        const hasHostPermission = await chrome.permissions.contains(__helpers.toHostPermission(sharedGolinksURL));
-        const response = await fetch(sharedGolinksURL, { credentials: hasHostPermission ? "include" : "same-origin" });
-        if (response.ok) {
-          sharedGolinksData = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
-          globalThis.__golinksPlusSharedCache = sharedGolinksData;
-        }
-      } catch (e) {
-        sharedGolinksData = {};
-      }
-    }
-  }
+  const { golinks = {}, sharedGolinks = {}, sharedGolinksURL, sharedGolinksNoCache = false } = await chrome.storage.local.get(["golinks", "sharedGolinks", "sharedGolinksURL", "sharedGolinksNoCache"]);
+  const sharedGolinksData = (sharedGolinksNoCache && sharedGolinksURL)
+    ? await loadSharedGolinks()
+    : (sharedGolinks || {});
   return { ...sharedGolinksData, ...golinks };
 }
 
@@ -231,20 +288,16 @@ function navigate(url, disposition) {
 
 // Failed fetches keep the cached shared golinks and record the error for the options page
 async function refreshSharedGolinks() {
-  const { sharedGolinksURL, sharedGolinksSkipHeader = false, sharedGolinksNoCache = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksSkipHeader", "sharedGolinksNoCache"]);
+  const { sharedGolinksURL, sharedGolinksNoCache = false } = await chrome.storage.local.get(["sharedGolinksURL", "sharedGolinksNoCache"]);
   if (!sharedGolinksURL) {
     return;
   }
 
   try {
-    // Credentials are only sent with host permission; without it CORS applies, and servers that
-    // allow any origin ("*") reject credentialed requests
-    const hasHostPermission = await chrome.permissions.contains(__helpers.toHostPermission(sharedGolinksURL));
-    const response = await fetch(sharedGolinksURL, { credentials: hasHostPermission ? "include" : "same-origin" });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    const sharedGolinks = await fetchSharedGolinks();
+    if (!sharedGolinks) {
+      return;
     }
-    const sharedGolinks = __helpers.parseGolinksCSV(await response.text(), sharedGolinksSkipHeader);
     if (sharedGolinksNoCache) {
       await chrome.storage.local.remove(["sharedGolinks"]);
       await chrome.storage.local.remove("sharedGolinksError");
