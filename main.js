@@ -4,7 +4,7 @@ const GOLINKS_TEMPLATE = { "gh": "https://github.com" };
 const INDEX_GOLINK_NAMES = ["links", "/"];
 const SHARED_REFRESH_ALARM = "refreshSharedGolinks";
 const SHARED_REFRESH_MINUTES = 60;
-const SHARED_FETCH_TIMEOUT_MS = 1000;
+const SHARED_FETCH_TIMEOUT_MS = 2000;
 const TRAILING_SLASHES = /\/+$/;
 const XML_SPECIAL_CHARS = /[&<>"']/g;
 

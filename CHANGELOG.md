@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.1] - 2026-11-12
+
+### Changed
+- Increased the non-cached shared links fetch timeout from 1 second to 2 seconds.
+
 ## [1.1.0] - 2026-11-03
 
 ### Added
